@@ -13,11 +13,13 @@ var path = require('path');
 var mime = require('mime');
 var Buffer = require('Buffer');
 var _ = require('underscore');
-var bodyParser = require('body-parser')
+var bodyParser = require('body-parser');
+/*var sleep=require('sleep');*/
+var μs = require('microseconds');
 
 var app = express();
-var urlencodedParser = bodyParser.urlencoded({ extended: false });
-var customParser = bodyParser.raw({ type: 'application/vnd.custom-type' });
+// var urlencodedParser = bodyParser.urlencoded({ extended: false });
+// customParser = bodyParser.raw({ type: 'application/vnd.custom-type' });
 
 //databases
 var reports = nano.use ('reports');// not needed
@@ -26,6 +28,13 @@ var topics = nano.use('topics');// probably not needed
 var records = nano.use('records');
 var curriculum = nano.use('curriculum');
 var curriculum_questions = nano.use('curriculum_questions');
+var authentication = nano.use('authentication_db');
+
+//var subscribingtopic='reports';
+var subscribingtopic='newAttempt';
+var publishingtopic='realTimeAnalysis';
+var recordsCSV='default.csv';
+var oldRecordsCSV='default.csv';
 
 //mqtt client
 client = mqtt.connect('mqtt://localhost:1883');
@@ -35,37 +44,60 @@ client.on('connect', function () {
 	//publish(publishingtopic,'sample.pdf');
 });
 
-//var subscribingtopic='reports';
-var subscribingtopic='newAttempt';
-var publishingtopic='realTimeAnalysis';
-var recordsCSV='default.csv';
-var oldRecordsCSV='default.csv';
 
 //********************************************************SERVER SETUP*************************************************************************
+//Done as we calling remote services from Ionic Serve
+//Enabling CORS //Not needed if app is running on mobile device
+app.use(function(req, res, next) {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+  next();
+});
+
 app.get('/', function (req, res) {
 	console.log("Got a GET request for the homepage");
 	getRecordsAsCSV(function(callback){
 		var file = __dirname + '/'+ callback;
 		var filename = path.basename(file);
 		var mimetype = mime.lookup(file);
-
 		res.setHeader('Content-disposition', 'attachment; filename=' + filename);
 		res.setHeader('Content-type', mimetype);
-
 		var filestream = fs.createReadStream(file);
 		filestream.pipe(res);
 	});
 });
 
-//app.use(getQuestions);
+app.get('/quiz', function (req, res) {
+	var img = fs.readFileSync('./images.jpg');
+    res.writeHead(200, {'Content-Type': 'image/jpg' });
+    res.end(img, 'binary');
+});
 
 function getQuestions(req,res,next){
 	pull_questionsByLO(req.params.tagId,function(arr){
 		res.send(arr);
-	})
-}
+	});
+};
 
 app.get('/q/:tagId',getQuestions, function(req, res) {
+});
+
+function getCurriculum(req,res,next){
+	pull_curriculum(function(arr){
+		res.send(arr);
+	});
+};
+
+app.get( '/curriculum', getCurriculum, function ( req, res ){ 
+});
+
+function getAuthentication(req,res,next){
+	pull_authentication(function(arr){
+		res.send(arr);
+	});
+};
+
+app.get( '/authenticate', getAuthentication, function ( req, res ){ 
 });
 
 app.get('/notify', function (req, res) {
@@ -76,11 +108,25 @@ app.get('/notify', function (req, res) {
 	res.send('ok thanx!');
 });
 
+// custom 404 page 
+app.use( function ( req, res ){ 
+	res.type( 'text/plain' );
+	res.status( 404 ); 
+	res.send( '404 -Not Found' ); 
+}); 
+
+// custom 500 page 
+app.use( function ( err , req, res , next ){ 
+  console.error(err.stack); 
+  res.type( 'text/plain' ); 
+  res.status( 500 ); 
+  res.send( '500 -Server Error' );
+});
+
 var server = app.listen(8080, function () {
 	var host = server.address().address;
 	var port = server.address().port;
 });
-
 
 //********************************************************DO THINGS*************************************************************************
 //subscribe(subscribingtopic);
@@ -113,7 +159,7 @@ function insert_report(doc, tried) {
 				}
 				else { return console.log(error); }
 			}
-			console.log(http_body);
+			console.log('inserted report: ' + http_body);
 		});
 }
 
@@ -128,7 +174,7 @@ function insert_topic(doc, tried) {
 				}
 				else { return console.log(error); }
 			}
-			console.log(http_body);
+			console.log('inserted topic: ' + http_body);
 		});
 }
 
@@ -143,7 +189,7 @@ function insert_analysis(doc, tried) {
 				}
 				else { return console.log(error); }
 			}
-			console.log(http_body);
+			console.log('inserted analysis: ' + http_body);
 		});
 }
 
@@ -206,6 +252,26 @@ function pull_questionsByLO(path, cb) {
 				if(count >= all)
 					cb(arr);
 			});
+		}
+		else
+			console.log(err);
+	});
+}
+
+function pull_curriculum(cb) {
+	curriculum.view('doc', 'get_all', function(err, body) {
+		if (!err) {
+			cb(body.rows);
+		}
+		else
+			console.log(err);
+	});
+}
+
+function pull_authentication(cb) {
+	authentication.view('doc', 'get_all', function(err, body) {
+		if (!err) {
+			cb(body.rows);
 		}
 		else
 			console.log(err);
@@ -322,11 +388,11 @@ function getRecordsAsCSV(callback){
 		body.rows.forEach(function(doc) {
 			header={};
 			var labelstring='label';
-			header[labelstring]='state';
+			header[labelstring]='status';
 			var valuestring='value';
-			header[valuestring]=doc.value.join('_')+'_'+doc.key+'.state';
+			header[valuestring]=doc.value.join('_')+'_'+doc.key+'.status';
 			var defaultstring='default';
-			header[defaultstring]='-';
+			header[defaultstring]='NA';
 
 			fields.push(header);
 			fieldnames.push(doc.value.join('_')+'_'+doc.key+'/state');
@@ -334,39 +400,39 @@ function getRecordsAsCSV(callback){
 			header2={};
 			header2[labelstring]='light';
 			header2[valuestring]=doc.value.join('_')+'_'+doc.key+'.context.light';
-			header2[defaultstring]='-';
+			header2[defaultstring]='NA';
 
 			fields.push(header2);
 			fieldnames.push(doc.value.join('_')+'_'+doc.key+'/light');
 
 			header3={};
 			header3[labelstring]='heat';
-			header3[valuestring]=doc.value.join('_')+'_'+doc.key+'.context.heat';
-			header3[defaultstring]='-';
+			header3[valuestring]=doc.value.join('_')+'_'+doc.key+'.context.heatindex';
+			header3[defaultstring]='NA';
 
 			fields.push(header3);
-			fieldnames.push(doc.value.join('_')+'_'+doc.key+'/heat');
+			fieldnames.push(doc.value.join('_')+'_'+doc.key+'/heatindex');
 
 			header4={};
 			header4[labelstring]='shaking';
 			header4[valuestring]=doc.value.join('_')+'_'+doc.key+'.context.shaking';
-			header4[defaultstring]='-';
+			header4[defaultstring]='NA';
 
 			fields.push(header4);
 			fieldnames.push(doc.value.join('_')+'_'+doc.key+'/shaking');
 
 			header5={};
-			header5[labelstring]='altitude';
+			header5[labelstring]='latitude';
 			header5[valuestring]=doc.value.join('_')+'_'+doc.key+'.context.alt';
-			header5[defaultstring]='-';
+			header5[defaultstring]='NA';
 
 			fields.push(header5);
 			fieldnames.push(doc.value.join('_')+'_'+doc.key+'/altitude');
 
 			header6={};
 			header6[labelstring]='longitude';
-			header6[valuestring]=doc.value.join('_')+'_'+doc.key+'.context.lon';
-			header6[defaultstring]='-';
+			header6[valuestring]=doc.value.join('_')+'_'+doc.key+'.context.long';
+			header6[defaultstring]='NA';
 
 			fields.push(header6);
 			fieldnames.push(doc.value.join('_')+'_'+doc.key+'/longitude');
@@ -374,7 +440,7 @@ function getRecordsAsCSV(callback){
 			header7={};
 			header7[labelstring]='timestamp';
 			header7[valuestring]=doc.value.join('_')+'_'+doc.key+'.timestamp';
-			header7[defaultstring]='-';
+			header7[defaultstring]='NA';
 
 			fields.push(header7);
 			fieldnames.push(doc.value.join('_')+'_'+doc.key+'/timestamp');
@@ -382,7 +448,7 @@ function getRecordsAsCSV(callback){
 			header8={};
 			header8[labelstring]='context';
 			header8[valuestring]=doc.value.join('_')+'_'+doc.key+'.duration';
-			header8[defaultstring]='-';
+			header8[defaultstring]='NA';
 
 			fields.push(header8);
 			fieldnames.push(doc.value.join('_')+'_'+doc.key+'/duration');
@@ -402,43 +468,82 @@ function getRecordsAsCSV(callback){
 		});
 	});
 
-    if (oldRecordsCSV!='default.csv'){
+/*    if (oldRecordsCSV!='default.csv'){
     	console.log('deleting ya old thang '+oldRecordsCSV);
     	var filePath = 'C:/Users/Salsabeel/Documents/IoT course/Project/'+oldRecordsCSV; 
     	fs.unlinkSync(filePath);
-    }
+    }*/
 
 
 }
 
 //****************************************************PUBLISH TO TEACHERS******************************************************************
 //publish to teachers
-function publish(publishingtopic, filename){	
-	readPDF(filename,function(cb){
-		client.publish(publishingtopic, cb, function(err){
+function publish(publishingtopic, filename){
+	console.log('OK gonna try to publish now');
+	var options={
+		qos:1
+	}
+/*	readPDF(filename,function(cb){
+		client.publish(publishingtopic, cb, options, function(err){
 			if (!err) console.log('analysis published');
+			else(console.log('MQTT PROBLEM'))
 		});
+	});*/
+	client.publish("realTimeAnalysis","ANYEONG!",options,function(err){
+		if (!err) console.log('analysis published');
+		else console.log('MQTT PROBLEM');		
 	});
 }
 
 function subscribe(subscribingtopic){
+
 	client.subscribe(subscribingtopic);
+
 	client.on('message', function (topic, message) {
-	var report = JSON.parse(message.toString());
-	insert_report(report,0);
-	var studentID = report.username;
-	console.log('student id: '+studentID);
-	pull_singleRecord(studentID, function(record){
-		var recID=record._id;
-		delete report.username;
-		record[report.qID]=report;
-		records.update(record, recID, function(err, res){
-			if(!err){
-				console.log(JSON.stringify(res));
-			}
-		});		
-		notifyR();
+		var report = JSON.parse(message.toString());
+		//insert_report(report,0);
+		var studentID = report.username;
+		console.log('student id: '+studentID);
+
+		console.log("Got a new attempt");
+/*		var start=μs.now();*/
+		//************************
+		getRecordsAsCSV(function(callback){
+			//************************
+			console.log('getting records as CSV');
+/*			var end = μs.now();
+			var diff=Math.floor(end-start);
+			sleep.usleep(2*diff);*/
+			//************************
+			publish('realTimeAnalysis','sample.pdf');
 		});
+/*		pull_singleRecord(studentID, function(record){
+			var recID=record._id;
+			delete report.username;
+			record[report.qID]=report;
+			records.update(record, recID, function(err, res){
+				if(err){
+					console.log(err);
+				}
+			});
+			insert_report(report,0);
+			//notifyR();
+
+			//************************
+			console.log("Got a GET request for the homepage");
+			var start=μs.now();
+			//************************
+
+			getRecordsAsCSV(function(callback){
+				//************************
+				var end = μs.now();
+				var diff=Math.floor(end-start);
+				sleep.usleep(2*diff);
+				//************************
+				publish('realTimeAnalysis','sample.pdf');
+			});
+		});*/
 	});
 
 }
